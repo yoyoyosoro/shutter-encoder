@@ -12,11 +12,22 @@ foreach ($scenario in @('close','alternate','email')) {
     $stdout = Join-Path $RunRoot "$scenario.stdout.log"
     $stderr = Join-Path $RunRoot "$scenario.stderr.log"
     $arguments = @('-Xmx4G','--enable-native-access=ALL-UNNAMED',('"-Duser.home=' + $profile + '"'),'-Duser.language=en','-Duser.country=US','-Djavax.accessibility.assistive_technologies=','-cp',('"' + $classes + ';' + $jar + '"'),'ExitPopupProbe',$scenario)
-    $child = Start-Process -FilePath (Join-Path $CandidateRoot 'runtime\bin\java.exe') -ArgumentList $arguments -WorkingDirectory $CandidateRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $child = [Diagnostics.Process]::new()
+    $child.StartInfo.FileName = Join-Path $CandidateRoot 'runtime\bin\java.exe'
+    $child.StartInfo.Arguments = $arguments -join ' '
+    $child.StartInfo.WorkingDirectory = $CandidateRoot
+    $child.StartInfo.UseShellExecute = $false
+    $child.StartInfo.CreateNoWindow = $true
+    $child.StartInfo.RedirectStandardOutput = $true
+    $child.StartInfo.RedirectStandardError = $true
+    $null = $child.Start()
+    $outTask = $child.StandardOutput.ReadToEndAsync()
+    $errTask = $child.StandardError.ReadToEndAsync()
     if (!$child.WaitForExit(45000)) { $child.Kill(); throw "Exit regression timed out: $scenario" }
-    $child.Refresh()
-    $output = [IO.File]::ReadAllText($stdout)
-    $errors = [IO.File]::ReadAllText($stderr)
+    $output = $outTask.GetAwaiter().GetResult()
+    $errors = $errTask.GetAwaiter().GetResult()
+    [IO.File]::WriteAllText($stdout,$output)
+    [IO.File]::WriteAllText($stderr,$errors)
     if ($child.ExitCode -ne 0 -or $output -notmatch 'STARTUP_OK' -or $output -notmatch 'CLOSE_TRIGGERED' -or $errors -match 'Exception|FAIL:') {
         throw "Exit regression failed: $scenario (exit $($child.ExitCode)). $errors"
     }

@@ -7,6 +7,7 @@ if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid 
 $maintenance = Join-Path $InstallRoot 'maintenance'
 $run = Join-Path $maintenance ('work\update-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run,(Join-Path $maintenance 'cache') -Force | Out-Null
+$updateLock = [IO.File]::Open((Join-Path $maintenance 'update.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 $log = Join-Path $run 'update.log'
 Start-Transcript -Path $log | Out-Null
 try {
@@ -70,19 +71,31 @@ try {
     }
     & (Join-Path $PSScriptRoot 'Test-AppExit.ps1') -JdkHome $JdkHome -CandidateRoot $candidate -RunRoot (Join-Path $run 'tests')
     if ($ValidateOnly) { Write-Host "VALIDATED_ONLY source=$sourceCommit version=$version"; return }
+    $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($InstallRoot + '\',[StringComparison]::OrdinalIgnoreCase) -and $_.Name -like 'Shutter Encoder*.exe' })
+    if ($running.Count -gt 0) { throw 'Please close Shutter Encoder before installation' }
+    $settingsPath = Join-Path $InstallRoot 'settings.xml'
+    $settings = $null
+    if (Test-Path -LiteralPath $settingsPath) { [xml]$settings = [IO.File]::ReadAllText($settingsPath) }
     $hash = (Get-FileHash -LiteralPath $compiled -Algorithm SHA256).Hash
     & (Join-Path $PSScriptRoot 'Install-Candidate.ps1') -InstallRoot $InstallRoot -CandidateRoot $candidate -ValidateInstalled {
         param($path)
         if ((Get-FileHash -LiteralPath (Join-Path $path 'app\Shutter Encoder.jar') -Algorithm SHA256).Hash -ne $hash) { throw 'Installed application hash differs' }
-        & (Join-Path $path 'runtime\bin\java.exe') -version 2>&1 | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw 'Installed runtime does not start' }
+        $check = [Diagnostics.Process]::new()
+        $check.StartInfo.FileName = Join-Path $path 'runtime\bin\java.exe'
+        $check.StartInfo.Arguments = '-version'
+        $check.StartInfo.UseShellExecute = $false
+        $check.StartInfo.CreateNoWindow = $true
+        $check.StartInfo.RedirectStandardError = $true
+        $null = $check.Start()
+        $versionTask = $check.StandardError.ReadToEndAsync()
+        if (!$check.WaitForExit(15000)) { $check.Kill(); throw 'Installed runtime check timed out' }
+        [IO.File]::WriteAllText((Join-Path $run 'installed-runtime.stderr.log'),$versionTask.GetAwaiter().GetResult())
+        if ($check.ExitCode -ne 0) { throw 'Installed runtime does not start' }
     }
-    $settingsPath = Join-Path $InstallRoot 'settings.xml'
-    if (Test-Path -LiteralPath $settingsPath) {
-        [xml]$settings = [IO.File]::ReadAllText($settingsPath)
+    if ($settings) {
         $setting = $settings.SelectSingleNode("//Component[Name='btnDisableUpdate']/Value")
         if ($setting) { $setting.InnerText='true'; $settings.Save($settingsPath) }
     }
     @{sourceCommit=$sourceCommit; version=$version; jarSha256=$hash; repository=$Repository; installedAt=(Get-Date -Format o); log=$log} | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     Write-Host "UPDATE_OK version=$version source=$sourceCommit"
-} finally { Stop-Transcript | Out-Null }
+} finally { Stop-Transcript | Out-Null; $updateLock.Dispose() }
