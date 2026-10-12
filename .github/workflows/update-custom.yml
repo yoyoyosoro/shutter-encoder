@@ -1,0 +1,54 @@
+name: Merge upstream into custom
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: custom-upstream-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Merge upstream without publishing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/paulpacifico/shutter-encoder.git
+          git fetch upstream master
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream fetch failed' }
+          git merge --no-ff --no-commit upstream/master
+          if ($LASTEXITCODE -ne 0) { throw 'Merge conflict: custom was not updated; resolve before retrying' }
+      - name: Compile and verify donation-free exit
+        shell: pwsh
+        run: |
+          ./.custom/Build.ps1 -JdkHome $env:JAVA_HOME -OutputJar "$env:RUNNER_TEMP/Shutter Encoder.jar"
+      - name: Publish verified custom branch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mergeHead = git rev-parse --git-path MERGE_HEAD
+          if (Test-Path -LiteralPath $mergeHead) {
+            git commit -m 'Merge upstream updates while retaining donation-free exit'
+            if ($LASTEXITCODE -ne 0) { throw 'Merge commit failed' }
+          }
+          git push origin HEAD:custom
+          if ($LASTEXITCODE -ne 0) { throw 'Publishing custom failed; another update may have changed the branch' }
+          "### Custom branch verified" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Source commit: $(git rev-parse HEAD)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          'Next, run the local Shutter Encoder update shortcut. Local desktop exit tests run before installation.' | Add-Content $env:GITHUB_STEP_SUMMARY
