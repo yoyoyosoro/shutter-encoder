@@ -101,7 +101,6 @@ import shutterencoder.library.WHISPER;
 import shutterencoder.library.YOUTUBEDL;
 import shutterencoder.ui.main.Shutter;
 import shutterencoder.ui.main.UIController;
-import shutterencoder.ui.others.Donate;
 import shutterencoder.ui.others.Equalizer;
 import shutterencoder.ui.others.Functions;
 import shutterencoder.ui.others.SceneDetection;
@@ -2888,17 +2887,7 @@ public class Utils extends Shutter {
 			VideoPlayerUtils.waveform = null;
 		}
 		
-		//Check donate account
-		if (showDonateWindow)
-		{
-			if (Donate.textMailDonate.getText().isEmpty() == false)
-			{
-				Donate.checkMailAddress(false, true);
-			}
-			else
-				new Donate();
-		}
-		else
-			System.exit(0);	
+		// Local modification (2026-10-12): exit after cleanup without a donation prompt.
+		System.exit(0);
 	}
 }
